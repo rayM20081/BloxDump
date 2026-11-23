@@ -97,7 +97,7 @@ public static class Dumper
                         dumpName = dumpName.Split("DAY-")[1];
                     }
                     string[] s2 = dumpName.Split("/");
-                    dumpName = s2[0];
+                    dumpName = SafeFileName(s2[0]);
                 }
                 else
                 {

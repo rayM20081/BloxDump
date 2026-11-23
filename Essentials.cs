@@ -1,8 +1,11 @@
 ﻿using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using RestSharp;
+using System.Buffers;
+using System.Data.SQLite;
 using System.Diagnostics;
 using System.Net;
+using System.Security.Cryptography;
 using System.Text;
 
 class Essentials
@@ -76,6 +79,10 @@ class Essentials
         .Split(Path.PathSeparator)
         .Select(path => Path.Combine(path, "ffmpeg.exe"))
         .FirstOrDefault(File.Exists);
+
+    // FFmpeg 7.1.1 essentials build from gyan.dev, byte-identical to GyanD/codexffmpeg release 7.1.1.
+    public const string FfmpegUrl = "https://github.com/EmK530/BloxDump/releases/download/dependencies/ffmpeg.exe";
+    public const string FfmpegSha256 = "b90225987bdd042cca09a1efb5e34e9848f2d1dbf5fbcd388753a44145522997";
 
     public static string webPath = ReadAliasedString("Cache.WebClient.Path");
     public static bool webIsDatabase = ReadConfigBoolean("Cache.WebClient.IsDatabase");
@@ -332,7 +339,15 @@ class Essentials
         }
     }
 
-    public static async Task<bool> DownloadDependencyAsync(string filename, string url)
+    public static async Task<bool> HasSha256Async(string path, string sha256)
+    {
+        if (!File.Exists(path))
+            return false;
+        await using FileStream fs = File.OpenRead(path);
+        return Convert.ToHexStringLower(await SHA256.HashDataAsync(fs)) == sha256;
+    }
+
+    public static async Task<bool> DownloadDependencyAsync(string filename, string url, string sha256)
     {
         print("Downloading dependency: " + filename);
         byte[]? content = await Download(new HttpClient(), url);
@@ -340,8 +355,35 @@ class Essentials
         {
             return false;
         }
+        string actual = Convert.ToHexStringLower(SHA256.HashData(content));
+        if (actual != sha256)
+        {
+            error($"Checksum mismatch for {filename}: expected {sha256}, got {actual}. Refusing to save it.");
+            return false;
+        }
         await File.WriteAllBytesAsync(filename, content);
         return true;
+    }
+
+    private static readonly SearchValues<char> InvalidFileNameChars = SearchValues.Create(Path.GetInvalidFileNameChars());
+    private static readonly SearchValues<char> HexChars = SearchValues.Create("0123456789abcdefABCDEF");
+
+    // Names taken from cache contents (JSON fields, playlist entries, CDN URLs) must stay a single path component.
+    public static string SafeFileName(string? name)
+    {
+        name = name?.Trim();
+        if (string.IsNullOrEmpty(name))
+            return "_";
+        if (name.AsSpan().ContainsAny(InvalidFileNameChars))
+        {
+            name = string.Create(name.Length, name, static (dst, src) =>
+            {
+                for (int i = 0; i < src.Length; i++)
+                    dst[i] = InvalidFileNameChars.Contains(src[i]) ? '_' : src[i];
+            });
+        }
+        name = name.TrimEnd('.');
+        return name.Length == 0 ? "_" : name;
     }
 
     public struct ParsedCache
@@ -380,6 +422,34 @@ class Essentials
         Khronos20 = 9
     }
 
+    private static bool IsHex(string s) => s.Length > 0 && !s.AsSpan().ContainsAnyExcept(HexChars);
+
+    private static bool IsRbxhFile(string path)
+    {
+        Span<byte> magic = stackalloc byte[4];
+        using FileStream fs = File.OpenRead(path);
+        return fs.ReadAtLeast(magic, magic.Length, throwOnEndOfStream: false) == magic.Length && magic.SequenceEqual("RBXH"u8);
+    }
+
+    private static bool IsRobloxStorageDb(string path)
+    {
+        if (!File.Exists(path))
+            return false;
+        try
+        {
+            var csb = new SQLiteConnectionStringBuilder { DataSource = path, ReadOnly = true, FailIfMissing = true };
+            using var connection = new SQLiteConnection(csb.ConnectionString);
+            connection.Open();
+            using var command = new SQLiteCommand("SELECT 1 FROM sqlite_master WHERE type='table' AND name='files'", connection);
+            return command.ExecuteScalar() != null;
+        }
+        catch (SQLiteException)
+        {
+            return false;
+        }
+    }
+
+    // Deletes only what is recognisably Roblox cache, so a wrong (custom) path cannot wipe unrelated files.
     public static bool EmptyFolder()
     {
         try
@@ -387,16 +457,36 @@ class Essentials
             string path = CacheScanner.targetPath;
             if (CacheScanner.TargetIsDatabase)
             {
+                if (!IsRobloxStorageDb(path))
+                {
+                    warn($"Refusing to delete '{path}': not a Roblox cache database.");
+                    return false;
+                }
                 File.Delete(path);
-                path = CacheScanner.dbFolder;
+                // a WAL left next to a recreated database would be replayed into it
+                File.Delete(path + "-wal");
+                File.Delete(path + "-shm");
+                // rbx-storage layout: <first hash byte as 2 hex chars>\<hash as hex>
+                if (Directory.Exists(CacheScanner.dbFolder))
+                {
+                    foreach (string dir in Directory.GetDirectories(CacheScanner.dbFolder))
+                    {
+                        string shard = Path.GetFileName(dir);
+                        if (shard.Length != 2 || !IsHex(shard))
+                            continue;
+                        foreach (string file in Directory.GetFiles(dir))
+                        {
+                            if (IsHex(Path.GetFileName(file)))
+                                File.Delete(file);
+                        }
+                    }
+                }
+                return true;
             }
             foreach (string file in Directory.GetFiles(path))
             {
-                File.Delete(file);
-            }
-            foreach (string dir in Directory.GetDirectories(path))
-            {
-                Directory.Delete(dir, recursive: true);
+                if (IsRbxhFile(file))
+                    File.Delete(file);
             }
         }
         catch (Exception)
@@ -467,16 +557,20 @@ class Essentials
         return TextureFormat.Unknown;
     }
 
-    public static async Task system(string cmd)
+    // Runs ffmpeg directly (no cmd.exe), so paths derived from cache contents are passed as literal arguments.
+    public static async Task RunFfmpeg(params string[] args)
     {
-        Process process = new Process();
-        ProcessStartInfo startInfo = new ProcessStartInfo();
-        startInfo.WindowStyle = ProcessWindowStyle.Hidden;
-        startInfo.FileName = "cmd.exe";
-        startInfo.Arguments = "/C " + cmd;
-        startInfo.WorkingDirectory = exedir;
-        process.StartInfo = startInfo;
-        process.Start();
+        ProcessStartInfo startInfo = new ProcessStartInfo(ffmpegPath!)
+        {
+            UseShellExecute = false,
+            WorkingDirectory = exedir
+        };
+        startInfo.ArgumentList.Add("-nostdin");
+        startInfo.ArgumentList.Add("-loglevel");
+        startInfo.ArgumentList.Add("quiet");
+        foreach (string arg in args)
+            startInfo.ArgumentList.Add(arg);
+        using Process process = Process.Start(startInfo)!;
         await process.WaitForExitAsync();
     }
 

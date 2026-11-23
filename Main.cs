@@ -28,10 +28,11 @@ class Entry
 
         if (ffmpegPath == null)
         {
-            bool downloaded = await DownloadDependencyAsync("ffmpeg.exe", "https://github.com/EmK530/BloxDump/releases/download/dependencies/ffmpeg.exe");
-            if (!downloaded)
+            string localFfmpeg = Path.Combine(exedir, "ffmpeg.exe");
+            if (!await HasSha256Async(localFfmpeg, FfmpegSha256)
+                && !await DownloadDependencyAsync(localFfmpeg, FfmpegUrl, FfmpegSha256))
                 fatal("Could not download dependency: ffmpeg.exe");
-            ffmpegPath = "ffmpeg.exe";
+            ffmpegPath = localFfmpeg;
         }
         if(Directory.GetCurrentDirectory().Contains("System32"))
         {
@@ -55,10 +56,12 @@ class Entry
             if(db)
             {
                 string dbDir = ReadAliasedString("Cache.ForceCustomDirectory.DBFolder");
-                if (!Directory.Exists(dir))
+                if (!Directory.Exists(dbDir))
                 {
-                    fatal($"ForceCustomDirectory is enabled, but a path was not found! ({dir})\nFix the config or disable ForceCustomDirectory.");
+                    fatal($"ForceCustomDirectory is enabled, but a path was not found! ({dbDir})\nFix the config or disable ForceCustomDirectory.");
                 }
+                if (!dbDir.EndsWith("\\"))
+                    dbDir += "\\";
                 CacheScanner.dbFolder = dbDir;
             }
         }

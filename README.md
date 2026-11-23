@@ -13,6 +13,21 @@ This essentially lets you dump assets from any Roblox game.
 When starting you will be prompted if you want to clear your cache.<br>
 This is to prevent any old assets from being caught. Any new cache files that show up will be dumped in real-time.
 
+## Fork: hardening changes
+This fork of [EmK530/BloxDump](https://github.com/EmK530/BloxDump) changes:
+* **Cache clearing** deletes only recognisable Roblox cache: `RBXH` files in folder mode; in database mode the `rbx-storage.db` (only if it has the `files` table) with its `-wal`/`-shm`, plus hex-named files inside 2-hex shard folders. A wrong custom path is refused instead of wiped.
+* **ffmpeg** runs directly instead of through `cmd.exe`, and its arguments are passed literally. The downloaded `ffmpeg.exe` is pinned by SHA-256 (FFmpeg 7.1.1 essentials from gyan.dev) and reused when already present.
+* **File names** taken from cache contents (font/locale names, playlist segments, CDN-derived names) are sanitised, so they can no longer write outside `assets/`.
+* **ktx.dll** is the Khronos-signed libktx 4.4.2 from the official KTX-Software installer.
+* `ForceCustomDirectory` with `IsDatabase: true` works: it used to check the database path instead of `DBFolder` and always exit.
+* Uses `System.Data.SQLite.Core` without the EF6 dependency tree and pins the NativeAOT compiler to 9.0.23.
+
+Build (needs the .NET SDK and the Visual Studio C++ build tools for NativeAOT):
+
+    dotnet publish BloxDump.csproj -c Release -r win-x64 -o publish
+
+Ship `BloxDump.exe`, `ktx.dll`, `SQLite.Interop.dll` and `draco_tiny_dec.dll` from `publish/`.
+
 ## Support
 List of everything BloxDump can currently dump:
 

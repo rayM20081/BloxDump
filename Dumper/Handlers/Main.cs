@@ -66,7 +66,7 @@ public static class EXTM3U
         bool succeeded = true;
         foreach (string i in segments)
         {
-            string safeName = i.Split("?")[0];
+            string safeName = SafeFileName(i.Split("?")[0]);
             print($"Thread-{whoami}: Downloading {safeName} for VideoFrame ({hash})");
             tries = 0;
             while (true)
@@ -76,18 +76,21 @@ public static class EXTM3U
                 RestResponse resp = client.Get(req);
                 if (resp.IsSuccessStatusCode)
                 {
-                    File.WriteAllBytes(tempdir + "/" + safeName, resp.RawBytes);
+                    string segmentPath = Path.GetFullPath(Path.Combine(tempdir, safeName));
+                    File.WriteAllBytes(segmentPath, resp.RawBytes);
                     print($"Thread-{whoami}: Repairing downloaded video...");
                     string name2 = safeName.Replace(".webm", "-repaired.webm");
-                    names.Add("file '" + name2 + "'");
-                    await system($"ffmpeg.exe -i \"%cd%\\temp\\VideoFrame-{hash}\\{safeName}\" -c copy -bsf:v setts=ts=PTS-STARTPTS \"%cd%\\temp\\VideoFrame-{hash}\\{name2}\" >nul 2>&1");
-                    if (!File.Exists(tempdir + "/" + name2))
+                    string repairedPath = Path.GetFullPath(Path.Combine(tempdir, name2));
+                    // concat demuxer quoting: ' must be written as '\''
+                    names.Add("file '" + name2.Replace("'", @"'\''") + "'");
+                    await RunFfmpeg("-i", segmentPath, "-c", "copy", "-bsf:v", "setts=ts=PTS-STARTPTS", repairedPath);
+                    if (!File.Exists(repairedPath))
                     {
                         error($"Thread-{whoami}: Repair failed, no output found.");
                         succeeded = false;
                         break;
                     }
-                    File.Delete(tempdir + "/" + safeName);
+                    File.Delete(segmentPath);
                     break;
                 }
                 else
@@ -112,7 +115,7 @@ public static class EXTM3U
             {
                 Directory.CreateDirectory("assets/Videos");
             }
-            await system($"ffmpeg.exe -f concat -safe 0 -i \"%cd%\\temp\\VideoFrame-{hash}\\videos.txt\" -c copy \"%cd%\\assets\\Videos\\{hash}.webm\" -y >nul 2>&1");
+            await RunFfmpeg("-y", "-f", "concat", "-safe", "0", "-i", Path.GetFullPath(Path.Combine(tempdir, "videos.txt")), "-c", "copy", Path.GetFullPath($"assets/Videos/{hash}.webm"));
         }
         Directory.Delete(tempdir, true);
     }
@@ -129,13 +132,14 @@ public static class FontList
                 Directory.CreateDirectory("assets/Fonts");
             }
             JObject js = JObject.Parse(Encoding.UTF8.GetString(content));
-            var outname = js["name"];
+            string outname = SafeFileName((string?)js["name"]);
             await File.WriteAllBytesAsync($"assets/Fonts/{outname}.json", content);
             JArray faces = (JArray)js["faces"];
             debug($"Thread-{whoami}: Found {faces.Count} fonts");
             foreach (JObject item in faces)
             {
-                if(File.Exists($"assets/Fonts/{outname}-{item["name"]}.ttf"))
+                string face = SafeFileName((string?)item["name"]);
+                if(File.Exists($"assets/Fonts/{outname}-{face}.ttf"))
                 {
                     debug($"Thread-{whoami}: Skipping already dumped Font.");
                     continue;
@@ -166,7 +170,7 @@ public static class FontList
                     }
                     if (fontdata != null)
                     {
-                        await File.WriteAllBytesAsync($"assets/Fonts/{outname}-{item["name"]}.ttf", fontdata);
+                        await File.WriteAllBytesAsync($"assets/Fonts/{outname}-{face}.ttf", fontdata);
                     } else
                     {
                         error($"Thread-{whoami}: Font download failed 3 times, giving up.");
@@ -201,7 +205,7 @@ public static class Translation
             JObject js = JObject.Parse(Encoding.UTF8.GetString(content));
             if (js.ContainsKey("locale"))
             {
-                string locale = (string)js["locale"];
+                string locale = SafeFileName((string?)js["locale"]);
                 string path = $"{outDir}/locale-{locale}-{dumpName}.json";
                 if (File.Exists(path))
                 {

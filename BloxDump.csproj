@@ -8,15 +8,10 @@
 		<AllowUnsafeBlocks>true</AllowUnsafeBlocks>
 	</PropertyGroup>
 
-	<Target Name="CopyKtxDll" AfterTargets="Build">
-		<PropertyGroup>
-			<KtxDllPath>Libs\Ktx2Sharp\binaries\win-x64\$(Configuration)\ktx.dll</KtxDllPath>
-		</PropertyGroup>
-		<Copy
-		  SourceFiles="$(KtxDllPath)"
-		  DestinationFolder="$(OutputPath)"
-		  SkipUnchangedFiles="true" />
-	</Target>
+	<ItemGroup>
+		<!-- libktx 4.4.2, Authenticode-signed by The Khronos Group (KTX-Software-4.4.2-Windows-x64.exe) -->
+		<None Include="Libs\Ktx2Sharp\binaries\win-x64\ktx.dll" Link="ktx.dll" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+	</ItemGroup>
 	
 	<PropertyGroup Condition="'$(Configuration)'=='RELEASE'">
 		<PublishSingleFile>true</PublishSingleFile>
@@ -37,6 +32,8 @@
 		<PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
 		<PackageReference Include="RestSharp" Version="112.1.0" />
 		<PackageReference Include="SixLabors.ImageSharp" Version="3.1.11" />
-		<PackageReference Include="System.Data.SQLite" Version="1.0.119" />
+		<PackageReference Include="System.Data.SQLite.Core" Version="1.0.119" />
+		<!-- NativeAOT runtime with the CVE-2026-111497 (Brotli) fix; the SDK default may lag behind -->
+		<PackageReference Include="Microsoft.DotNet.ILCompiler" Version="9.0.23" />
 	</ItemGroup>
 </Project>
